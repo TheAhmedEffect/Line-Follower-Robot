@@ -1,0 +1,393 @@
+#include <esp32-hal-rgb-led.h>
+#include <sys/_stdint.h>
+#include <Preferences.h>
+
+#ifndef SENSOR_H
+#define SENSOR_H
+
+#include <Arduino.h>
+#include <algorithm>
+#include <bitset>
+
+#define NUM_SENSORS 13      //number of sensors
+#define ADC_MAX_VALUE 4095  //for esp32 based boards with 12-bit ADCs, 2^12 = 4096
+#define CALIBRATION_COUNT 400
+#define NUM_THRESHOLD_READINGS 50
+#define RC_SENSOR_TIMOUT 2500
+const uint8_t NUM_SAMPLES_PER_SENSOR = 4;
+
+//globally available data retrieved from samples
+uint16_t sensorValues[NUM_SENSORS];
+std::bitset<NUM_SENSORS> pattern;
+uint16_t lastPosition;
+bool onLine = false;
+uint16_t position;
+
+
+//pin definitions
+//if using MUX,     pins = {S0, S1, S2, S3, SIG};
+//if not using MUX, pins = {0, 1, 2, 3, 4, 5, etc.}; 
+uint8_t pins[] = {14, 27, 26, 25, 33};
+
+#ifdef USE_MUX
+bool isMuxPresent = true;
+#else
+bool isMuxPresent = false;
+#endif
+
+#ifdef SENSOR_DIGITAL
+bool digitalSensor = true;
+#else
+bool digitalSensor = false;
+#endif
+
+const uint8_t g_muxSelector[15][4] = {
+//  s0, s1, s2,  s3     channel
+//    {0,  0,  0,  0}, // 0
+    {1,  0,  0,  0}, // 1
+    {0,  1,  0,  0}, // 2
+    {1,  1,  0,  0}, // 3
+    {0,  0,  1,  0}, // 4
+    {1,  0,  1,  0}, // 5
+    {0,  1,  1,  0}, // 6
+    {1,  1,  1,  0}, // 7
+    {0,  0,  0,  1}, // 8
+    {1,  0,  0,  1}, // 9
+    {0,  1,  0,  1}, // 10
+    {1,  1,  0,  1}, // 11
+    {0,  0,  1,  1}, // 12
+    {1,  0,  1,  1}, // 13
+    {0,  1,  1,  1}, // 14
+    {1,  1,  1,  1}  // 15
+};
+
+
+
+//Stores maximum, minimum, and thresholds for each sensor
+typedef struct CalibrationData
+{
+    uint16_t maximum[NUM_SENSORS];
+    uint16_t minimum[NUM_SENSORS];
+    uint16_t threshold[NUM_SENSORS];
+    uint16_t inverseThreshold[NUM_SENSORS];
+    bool initialized;
+} CalibrationData;
+
+//globally defined calibration variable
+CalibrationData calibration;
+//set initialized to false
+
+
+inline bool getSurface(uint16_t sensorValue, uint16_t threshold) { return sensorValue > threshold ? true : false; }
+
+void readRaw(uint16_t sensorValues[NUM_SENSORS], bool mux, bool isSensorDigital)
+{
+    //if false, don't use mux
+    //if true, use mux
+
+    //NOTE: No mux usage is supported right now for digital RC sensors
+
+    if(isSensorDigital)
+    {
+      for(uint8_t i = 0; i < NUM_SENSORS; i++)
+      {
+        sensorValues[i] = RC_SENSOR_TIMOUT;
+        pinMode(pins[i], OUTPUT);
+        digitalWrite(pins[i], HIGH);
+      }
+      
+      delayMicroseconds(10);
+
+      {
+        noInterrupts();
+
+        uint32_t startTime = micros();
+        uint16_t time = 0;
+
+        for(uint8_t i = 0; i < NUM_SENSORS; i++)
+        {
+          pinMode(pins[i], INPUT);
+        }
+
+        interrupts();
+
+        while(time < RC_SENSOR_TIMOUT)
+        {
+          noInterrupts();
+          time = micros() - startTime;
+          for(uint8_t i = 0; i < NUM_SENSORS; i++)
+          {
+            if((digitalRead(pins[i]) == LOW) && (time < sensorValues[i]))
+            {
+              sensorValues[i] = time;
+            }
+          }
+          interrupts();
+        }
+      }
+      return;
+    }
+    else
+    {
+      //reset the sensorValues array
+      for(uint8_t i = 0; i < NUM_SENSORS; i++)
+      {
+          sensorValues[i] = 0;
+      }
+      //multi-sample each sensor value
+      for(uint8_t i = 0; i < NUM_SAMPLES_PER_SENSOR; i++)
+      {
+          for(uint8_t j = 0; j < NUM_SENSORS; j++)
+          {
+              if(mux)     //read using mux
+              {
+                  //select channel
+                  digitalWrite(pins[0], g_muxSelector[j][0]);
+                  digitalWrite(pins[1], g_muxSelector[j][1]);
+                  digitalWrite(pins[2], g_muxSelector[j][2]);
+                  digitalWrite(pins[3], g_muxSelector[j][3]);
+
+                  //finally read that channel
+                  sensorValues[j] += analogRead(pins[4]);
+              }
+              else        //read without using mux
+              {
+                  sensorValues[j] += analogRead(pins[j]);
+              }
+          }
+      }
+
+      //get rounded average of multi-sampled readings
+      for(uint8_t i = 0; i < NUM_SENSORS; i++)
+      {
+          sensorValues[i] = (sensorValues[i] + (NUM_SAMPLES_PER_SENSOR >> 1)) / NUM_SAMPLES_PER_SENSOR;
+      }
+      return;
+    }
+}
+
+uint16_t readCalibrated(uint16_t sensorValues[NUM_SENSORS], uint8_t start = 0, uint8_t end = NUM_SENSORS, bool inverse = false)
+{
+    uint16_t denominator;
+    int16_t value;
+    //first get raw readings
+    readRaw(sensorValues, isMuxPresent, digitalSensor);
+
+    //get normalized sensor readings and store them
+    //store the pattern based on threshold values
+    for(uint8_t i = 0; i < NUM_SENSORS; i++)
+    {
+        denominator = calibration.maximum[i] - calibration.minimum[i];
+        if(denominator != 0)
+        {
+            value = (((int32_t)sensorValues[i]) - calibration.minimum[i]) * 1000 / denominator;
+        }
+
+        if(value < 0) value = 0;
+        if(value > 1000) value = 1000;
+
+        sensorValues[i] = value;
+        pattern[i] = (value > calibration.threshold[i]);
+    }
+
+
+    //line position code: 0 to (end - 1) * 1000
+    onLine = false;
+    uint32_t avg = 0; //weighted total
+    uint16_t sum = 0; //denominator
+    //here by default start = 0, end = NUM_SENSORS
+    //change these values to get position value based on different portion of sensors
+    for(uint8_t i = start; i < end; i++)
+    {
+      uint16_t value = sensorValues[i];
+
+      if(inverse) { value = calibration.inverseThreshold[i] - value; }
+      
+      if(value > 200) { onLine = true; }
+      
+
+      if(value > 50)  //if sensor values above a noise threshold
+      {
+        avg += (uint32_t)value * (i * 1000);
+        sum += value;
+      }
+    }
+
+    //last position returning if line is lost from the centre of the sensors
+    if(!onLine)
+    {
+      if(lastPosition < (end - start - 1) * 1000 / 2)
+      {
+        return 0;
+      }
+      else
+      {
+        return (end - start - 1) * 1000;
+      }
+    }
+
+    lastPosition = avg / sum;
+    return lastPosition; 
+}
+
+
+//NON-VOLATILE STORAGE FUNCTIONS//
+bool isCalibrated()
+{
+  Preferences preferences;
+  //open namespace in read_only mode
+  preferences.begin("lfr", true);
+  //now find the isCalibrated flag
+  //if it exists, the bot was calibrated previously, if not the bot needs calibation
+  //if number of sensors has changed, we need to recalibrate
+  if(preferences.getUChar("num_sensors") != NUM_SENSORS || preferences.getBool("isCalibrated") == false)
+  {
+    preferences.end();
+    return false;
+  }
+  preferences.end();
+  return true;
+}
+
+void writeCalibrationValues(CalibrationData t_cal)
+{
+  Preferences preferences;
+  preferences.begin("lfr", false);
+  preferences.putBytes("max", (byte*)&t_cal.maximum, sizeof(t_cal.maximum));
+  preferences.putBytes("min", (byte*)&t_cal.minimum, sizeof(t_cal.minimum));
+  preferences.putBytes("threshold", (byte*)&t_cal.threshold, sizeof(t_cal.threshold));
+  preferences.putBytes("inverse_threshold", (byte*)&t_cal.inverseThreshold, sizeof(t_cal.inverseThreshold));
+  preferences.putBool("initialized", t_cal.initialized);
+  preferences.putUChar("num_sensors", NUM_SENSORS);
+  preferences.putBool("isCalibrated", true);
+  preferences.end();
+}
+
+CalibrationData readCalibrationValues()
+{
+  CalibrationData m_data;
+  Preferences preferences;
+  preferences.begin("lfr", true);
+  preferences.getBytes("max", &m_data.maximum, sizeof(m_data.maximum));
+  preferences.getBytes("min", &m_data.minimum, sizeof(m_data.minimum));
+  preferences.getBytes("threshold", &m_data.threshold, sizeof(m_data.threshold));
+  preferences.getBytes("inverse_threshold", &m_data.inverseThreshold, sizeof(m_data.inverseThreshold));
+  m_data.initialized = preferences.getBool("initialized");
+  preferences.end();
+  return m_data;
+}
+//====================================================================================//
+
+
+
+void calibrate()
+{
+    calibration.initialized = false;
+    uint16_t sensorValues[NUM_SENSORS];
+    //keep re-running calibration till calibration count
+    //a.k.a how many times do we want to calibrate
+    for(uint16_t calCount = 0; calCount < CALIBRATION_COUNT; calCount++)
+    {
+        uint16_t maxSensorValues[NUM_SENSORS];
+        uint16_t minSensorValues[NUM_SENSORS];
+
+        //if calibration was initialized before, don't bother reinitializing it
+        if(!calibration.initialized)
+        {
+            //intialize the calibration arrays
+            for(uint8_t i = 0; i < NUM_SENSORS; i++)
+            {
+                calibration.maximum[i] = 0;
+                calibration.minimum[i] = ADC_MAX_VALUE;
+            }
+            calibration.initialized = true;
+        }
+
+        //take max and min of 10 readings for each sensor
+        for(uint8_t i = 0; i < 10; i++)
+        {
+            readRaw(sensorValues, isMuxPresent, digitalSensor);
+            for(uint8_t j = 0; j < NUM_SENSORS; j++)
+            {
+                if(i == 0 || sensorValues[j] > maxSensorValues[j])
+                {
+                    maxSensorValues[j] = sensorValues[j];
+                }
+                if(i == 0 || sensorValues[j] < minSensorValues[j])
+                {
+                    minSensorValues[j] = sensorValues[j];
+                }
+            }
+        }
+
+        //now set the calibration values accordingly
+        for(uint8_t i = 0; i < NUM_SENSORS; i++)
+        {
+            if(minSensorValues[i] > calibration.maximum[i])
+            {
+                calibration.maximum[i] = minSensorValues[i];
+            }
+            if(maxSensorValues[i] < calibration.minimum[i])
+            {
+                calibration.minimum[i] = maxSensorValues[i];
+            }
+        }
+    }
+
+
+    //now set the thresholds for each sensor
+    uint16_t max[NUM_SENSORS][NUM_THRESHOLD_READINGS];
+    uint16_t min[NUM_SENSORS][NUM_THRESHOLD_READINGS];
+    uint16_t i_threshold[NUM_SENSORS];
+
+    // put sensor on black surface
+    Serial.println("Put on ALL BLACK!");
+    delay(2000);
+    //neopixelWrite(RGB_BUILTIN, 0, 0, RGB_BRIGHTNESS);
+    //do {  }while (digitalRead(BUTTON_SELECT) != LOW);
+    //neopixelWrite(RGB_BUILTIN, 0, 0, 0);
+
+    for(uint8_t i = 0; i < NUM_SENSORS; i++)
+    {
+        for(uint8_t j = 0; j < NUM_THRESHOLD_READINGS; j++)
+        {
+            readCalibrated(sensorValues);
+            max[i][j] = sensorValues[i];
+        }
+        std::sort(max[i], max[i] + NUM_THRESHOLD_READINGS);
+    }
+
+    // inverse threhold
+    for(uint8_t i = 0; i < NUM_SENSORS; i++) {
+      calibration.inverseThreshold[i] = ((max[i][NUM_SENSORS - 1] + max[i][NUM_SENSORS - 2]) / 2);
+    }
+
+    // put sensor on white surface
+    //neopixelWrite(RGB_BUILTIN, RGB_BRIGHTNESS, RGB_BRIGHTNESS, RGB_BRIGHTNESS);
+    //do {  }while (digitalRead(BUTTON_SELECT) != LOW);
+    //neopixelWrite(RGB_BUILTIN, 0, 0, 0);
+    Serial.println("Put on ALL WHITE!");
+    delay(2000);
+
+    for(uint8_t i = 0; i < NUM_SENSORS; i++)
+    {
+        for(uint8_t j = 0; j < NUM_THRESHOLD_READINGS; j++)
+        {
+            readCalibrated(sensorValues);
+            min[i][j] = sensorValues[i];
+        }
+        std::sort(min[i], min[i] + NUM_THRESHOLD_READINGS);
+    }
+
+    //use median values as threshold
+    for(uint8_t i = 0; i < NUM_SENSORS; i++)
+    {
+        uint16_t maxMedian = (NUM_SENSORS % 2 == 0) ? ((max[i][NUM_SENSORS/2-1]+max[i][NUM_SENSORS/2]) / 2) : max[i][NUM_SENSORS / 2];
+        uint16_t minMedian = (NUM_SENSORS % 2 == 0) ? ((min[i][NUM_SENSORS/2-1]+min[i][NUM_SENSORS/2]) / 2) : min[i][NUM_SENSORS / 2];
+        calibration.threshold[i] = minMedian + ((maxMedian - minMedian) / 2); 
+    }
+  
+  writeCalibrationValues(calibration);
+}
+
+#endif

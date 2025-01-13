@@ -1,0 +1,51 @@
+char turn = 'S';
+int sum = 0;
+
+void drive()
+{
+  for(int i = 0; i < NUM_SENSORS; i++)
+  {
+    if(pattern[i]) sum++;
+  }
+  error = position - goal;
+  int adjustment = (error * Kp) + ((error - lastError) * kd);
+  
+  if((!pattern[0] || !pattern[1]) && (pattern[11] || pattern[12]) && !pattern[6]) turn = 'R';
+  else if((pattern[0] || pattern[1]) && (!pattern[11] || !pattern[12]) && !pattern[6]) turn = 'L';
+
+  motor1.drive(constrain((base_speed + adjustment), -255, 255));
+  motor2.drive(constrain((base_speed - adjustment), -255, 255));
+
+  lastError = error;
+
+  // Serial.print(sum);
+  // Serial.print("\t");
+  // Serial.print(turn);
+  // Serial.println();
+  if(sum == 0)
+  {
+    if(turn == 'R')
+    {
+      digitalWrite(LED_BUILTIN, HIGH);
+      motor1.brake();
+      motor2.brake();
+      motor1.drive(100);
+      motor2.drive(-100);
+      delay(100);
+      turn = 'S';
+      digitalWrite(LED_BUILTIN, LOW);
+    }
+    else if(turn == 'L')
+    {
+      digitalWrite(LED_BUILTIN, HIGH);
+      motor1.brake();
+      motor2.brake();
+      motor1.drive(-100);
+      motor2.drive(100);
+      delay(100);
+      turn = 'S';
+      digitalWrite(LED_BUILTIN, LOW);
+    }
+  }
+  sum = 0;
+}

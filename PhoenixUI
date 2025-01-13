@@ -1,0 +1,1143 @@
+#include <pins_arduino.h>
+#include <esp32-hal-gpio.h>
+#ifndef PHOENIX_UI_H
+#define PHOENIX_UI_H
+
+/*
+  * PHOENIX UI Major Overhaul version 2.0.0
+
+  * Features
+    - modify and permanently save values of Kp, Ki and Kd
+    - inspect sensor feedback based on threshold values or raw values
+    - manually trigger variables such as inverse line, left/right hand follow via UI
+    - alphabet based trigger counting to keep track of upto 26 trigger actions.
+    - check motor rotation
+    - save and load calibration data
+    - built-in lap timer
+
+  * Usage - call setUI inside setup() once and you are good to go.
+  
+  PS. Your need to define button in the main .ino file first or simply copy the following lines.
+  <
+    #define BUTTON_SELECT 3
+    #define BUTTON_EXIT 18
+    #define BUTTON_UP 11
+    #define BUTTON_DOWN 10
+    #define BUZZER 19
+    #define BUZZER_FREQ 2100
+
+    // drive mode stuff
+    bool left_hand_follow = false;
+    bool right_hand_follow = false;
+    bool line_break = false;
+
+    bool left_flag;
+    bool right_flag;
+    bool center_flag;
+
+    bool lineInverse = false;
+    int path_index = 0;
+    int left_index = 0;
+  >
+
+  ~ void.out
+*/
+
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define WHITE SSD1306_WHITE
+#define OLED_RESET -1
+#define SCREEN_ADDRESS 0x3C
+Adafruit_SSD1306 myscreen(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+bool BUTTON_DOWN_CLICKED = true;
+bool BUTTON_UP_CLICKED = true;
+bool BUTTON_SELECT_CLICKED = true;
+bool BUTTON_EXIT_CLICKED = true;
+
+short menu_selected_item = 3;
+short motor_selected_item = 1;
+const int NUM_OPTION = 6;
+
+short hud_x_cursor = 3;
+
+int left_m = 40;
+int right_m = 40;
+bool switch_m = false;
+
+short load_data_cursor = 5;
+short selected_load_data_item = 0;
+
+short pid_cursor_pos = 0;
+
+void setUI();
+void printInt(int val, int x, int y, bool clr);
+void centerText(const char* str, int x, int y, bool clr);
+void printFloat(float val, int x, int y, bool clr, int precision);
+void centerString(String str, int x, int y, bool clr);
+
+void menu();
+void display_menu_info();
+void menu_action();
+void scroll_left();
+void scroll_right();
+
+void checkMotor();
+void display_motor_info();
+void motor_menu_action();
+void set_right_motor();
+void set_left_motor();
+
+void inspect();
+void sensorHistogram(uint16_t sensorValues[]);
+void sensorHistogram(std::bitset <NUM_SENSORS> pattern);
+void systemInfo();
+
+void setDriveHUD();
+void HUD_action();
+void display_HUD_info();
+
+void load_data();
+void load_data_action();
+void display_load_data_info();
+String load_data_options[] = {"LOAD CALIBRATE", "RE-CALIBRATE", "LOAD PID", "TUNE PID"};
+
+void loadPID();
+void updatePID();
+void loadCalibrationData();
+void display_calibration_Info();
+
+void display_pid_settings();
+void tune_PID();
+void adjustPID();
+byte push(byte button_number);
+
+void aboutUI();
+
+void lap_time();
+/*
+  - enables the display
+  - call setUI() inside setup() once
+*/
+void setUI() {
+  pinMode(BUTTON_SELECT, INPUT_PULLUP);
+  pinMode(BUTTON_EXIT, INPUT_PULLUP);
+  pinMode(BUTTON_UP, INPUT_PULLUP);
+  pinMode(BUTTON_DOWN, INPUT_PULLUP);
+  pinMode(BUZZER, OUTPUT);
+
+  delay(500);
+  myscreen.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS);
+  myscreen.setRotation(2);
+
+  myscreen.clearDisplay();
+  myscreen.setTextColor(WHITE);
+  myscreen.setTextSize(1);
+  myscreen.display();
+}
+
+struct Menu_list {
+  char name[20];
+  short x_pos;
+};
+
+struct Menu_list menu_options[] = {
+  { "ABOUT", -96 },
+  { "LOAD DATA", -48 },
+  { "INSPECT", 0 },
+  { "RUN", 48 },
+  { "DRIVE MODE", 96 },
+  { "CHECK MOTOR", 144 }
+};
+
+struct Motor_menu_list {
+  char m_name[20];
+  short x_pos;
+};
+
+struct Motor_menu_list motor_menu_options[] = {
+  { "LEFT MOTOR", 0 },
+  { "ON|OFF", 43 },
+  { "RIGHT MOTOR", 86 }
+};
+
+const unsigned char menu_icons[NUM_OPTION] [128] PROGMEM = {
+  // 'ABOUT, 32x32px
+  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xf0, 0x00, 0x00, 0x3f, 0xfc, 0x00, 0x00, 0xf0, 0x0f, 0x00,
+    0x01, 0xc0, 0x03, 0x80, 0x07, 0x00, 0x00, 0xe0, 0x06, 0x00, 0x00, 0x60, 0x0c, 0x03, 0xc0, 0x30,
+    0x18, 0x03, 0xc0, 0x18, 0x18, 0x03, 0xc0, 0x18, 0x30, 0x01, 0x80, 0x0c, 0x30, 0x00, 0x00, 0x0c,
+    0x60, 0x00, 0x00, 0x06, 0x60, 0x07, 0x80, 0x06, 0x60, 0x07, 0xc0, 0x06, 0x60, 0x03, 0xc0, 0x06,
+    0x60, 0x03, 0xc0, 0x06, 0x60, 0x03, 0xc0, 0x06, 0x60, 0x03, 0xc0, 0x06, 0x60, 0x03, 0xc0, 0x06,
+    0x30, 0x03, 0xc0, 0x0c, 0x30, 0x03, 0xc0, 0x0c, 0x18, 0x03, 0xc0, 0x18, 0x18, 0x07, 0xe0, 0x18,
+    0x0c, 0x03, 0xc0, 0x30, 0x06, 0x00, 0x00, 0x60, 0x07, 0x00, 0x00, 0xe0, 0x01, 0xc0, 0x03, 0x80,
+    0x00, 0xf0, 0x0f, 0x00, 0x00, 0x3f, 0xfc, 0x00, 0x00, 0x0f, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00 
+  },
+
+  // 'LOAD DATA, 32x32px
+  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x80, 0x00, 0x00, 0x01, 0x80, 0x00,
+    0x00, 0x1d, 0xb8, 0x00, 0x00, 0x7d, 0xbe, 0x00, 0x00, 0xe1, 0x87, 0x00, 0x01, 0xc0, 0x03, 0x80,
+    0x03, 0x80, 0x01, 0xc0, 0x07, 0x01, 0xc0, 0xe0, 0x06, 0x01, 0xf0, 0x60, 0x0c, 0x18, 0x38, 0x30,
+    0x0c, 0x00, 0x0c, 0x30, 0x0c, 0x20, 0x0c, 0x30, 0x00, 0x60, 0x06, 0x00, 0x3e, 0x60, 0x06, 0x7c,
+    0x3e, 0x60, 0x06, 0x7c, 0x00, 0x60, 0x06, 0x00, 0x0c, 0x30, 0x0c, 0x30, 0x0c, 0x30, 0x0c, 0x30,
+    0x0c, 0x1c, 0x38, 0x30, 0x06, 0x0f, 0xf0, 0x60, 0x07, 0x03, 0xc0, 0xe0, 0x03, 0x80, 0x01, 0xc0,
+    0x01, 0xc0, 0x03, 0x80, 0x00, 0xe1, 0x87, 0x00, 0x00, 0x7d, 0xbe, 0x00, 0x00, 0x1d, 0xb8, 0x00,
+    0x00, 0x01, 0x80, 0x00, 0x00, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+  },
+
+  // 'INSPECT, 32x32px
+  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xf8, 0x00, 0x0e, 0x0c, 0x00,
+    0x00, 0x7f, 0xd8, 0x78, 0x00, 0xff, 0xb0, 0x00, 0x01, 0xc0, 0x69, 0xf8, 0x03, 0x98, 0xdc, 0x00,
+    0x07, 0x34, 0x9c, 0x00, 0x06, 0x1c, 0x0e, 0x00, 0x0e, 0x18, 0x86, 0x00, 0x0e, 0x29, 0xc0, 0x00,
+    0x0c, 0x29, 0x7f, 0xf8, 0x0c, 0x47, 0x00, 0x18, 0x7f, 0xc6, 0x06, 0x00, 0x0e, 0x0e, 0x06, 0x00,
+    0x06, 0x0a, 0x0e, 0x00, 0x07, 0x0e, 0x1c, 0x00, 0x03, 0x80, 0x3c, 0x00, 0x01, 0xe0, 0x7e, 0x00,
+    0x00, 0xff, 0xff, 0x00, 0x00, 0x7f, 0xc7, 0xc0, 0x00, 0x00, 0x03, 0xe0, 0x00, 0x00, 0x01, 0xf0,
+    0x00, 0x00, 0x01, 0xf8, 0x00, 0x00, 0x00, 0xfc, 0x00, 0x00, 0x00, 0x7e, 0x00, 0x00, 0x00, 0x3e,
+    0x00, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+  },
+
+  // 'RUN, 32x32px
+  { 0x00, 0x00, 0x00, 0x00, 0x1f, 0x80, 0x00, 0x00, 0x3f, 0xc0, 0x00, 0x00, 0x7f, 0xe0, 0x00, 0x00,
+    0xf0, 0xf0, 0x00, 0x00, 0xe0, 0x70, 0x00, 0x00, 0xe6, 0x70, 0x00, 0x00, 0xe4, 0x70, 0x00, 0x00,
+    0xf0, 0xf0, 0x00, 0x00, 0x79, 0xe0, 0x00, 0x00, 0x7f, 0xe0, 0x00, 0x00, 0x3f, 0xc0, 0x0e, 0x00,
+    0x3f, 0x80, 0x0f, 0xc0, 0x1f, 0x80, 0x0f, 0xf0, 0x0f, 0x00, 0x0f, 0xfe, 0x0f, 0x00, 0x0f, 0xff,
+    0x06, 0x00, 0x0f, 0xfe, 0x04, 0x7c, 0x0f, 0xfc, 0x00, 0xfe, 0x0f, 0xf0, 0x00, 0x07, 0x0f, 0xc0,
+    0x00, 0x03, 0x0f, 0x00, 0x00, 0x03, 0x0c, 0x00, 0x00, 0x07, 0x0c, 0x00, 0x7f, 0xfe, 0x0c, 0x00,
+    0xff, 0xf8, 0x0c, 0x00, 0xc0, 0x00, 0x00, 0x00, 0xc0, 0x00, 0x00, 0x00, 0xc0, 0x00, 0x1e, 0x00,
+    0x7f, 0xff, 0x3e, 0x00, 0x3f, 0xff, 0x3e, 0x00, 0x00, 0x00, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00
+  },
+
+  // 'SET DRIVE MODE, 32x32px
+  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xc0, 0x00, 0x00, 0x03, 0xc0, 0x00,
+    0x00, 0x03, 0xc0, 0x00, 0x01, 0x83, 0xc1, 0x80, 0x03, 0xcf, 0xf3, 0xc0, 0x07, 0xff, 0xff, 0xe0,
+    0x07, 0xff, 0xff, 0xe0, 0x03, 0xff, 0xff, 0xc0, 0x01, 0xff, 0xff, 0x80, 0x01, 0xf8, 0x1f, 0x80,
+    0x03, 0xf0, 0x0f, 0xc0, 0x03, 0xe0, 0x07, 0xc0, 0x3f, 0xe0, 0x07, 0xfc, 0x3f, 0xe0, 0x07, 0xfc,
+    0x3f, 0xe0, 0x07, 0xfc, 0x3f, 0xe0, 0x07, 0xfc, 0x03, 0xe0, 0x07, 0xc0, 0x03, 0xf0, 0x0f, 0xc0,
+    0x01, 0xf8, 0x1f, 0x80, 0x01, 0xff, 0xff, 0x80, 0x03, 0xff, 0xff, 0xc0, 0x07, 0xff, 0xff, 0xe0,
+    0x07, 0xff, 0xff, 0xe0, 0x03, 0xcf, 0xf3, 0xc0, 0x01, 0x83, 0xc1, 0x80, 0x00, 0x03, 0xc0, 0x00,
+    0x00, 0x03, 0xc0, 0x00, 0x00, 0x03, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+  },
+
+  // 'CHECK MOTOR, 32x32px
+  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0xf8, 0x00, 0x00, 0xe0, 0x07, 0x00, 0x01, 0x80, 0x01, 0x80,
+    0x02, 0x00, 0x00, 0x40, 0x04, 0x30, 0x00, 0x20, 0x08, 0x7a, 0xb4, 0x10, 0x10, 0x4b, 0x3f, 0x08,
+    0x30, 0x4b, 0x37, 0x0c, 0x30, 0x7b, 0xa5, 0x0c, 0x67, 0x00, 0x00, 0x06, 0x42, 0x00, 0x00, 0x02,
+    0x40, 0x1f, 0xf8, 0x02, 0xc0, 0x12, 0x78, 0x03, 0x80, 0x3c, 0xfc, 0x01, 0xc0, 0x3b, 0xfc, 0x03,
+    0xc1, 0xbf, 0xfd, 0x83, 0x01, 0x7f, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00,
+    0x01, 0xfe, 0x7f, 0x80, 0x01, 0x87, 0xe1, 0x80, 0x01, 0xb7, 0xed, 0x80, 0x01, 0x86, 0x61, 0x80,
+    0x01, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x00, 0x01, 0xe0, 0x07, 0x80, 0x0f, 0xe0, 0x07, 0xf0,
+    0x08, 0x00, 0x00, 0x10, 0x08, 0x00, 0x00, 0x10, 0x07, 0x80, 0x01, 0xe0, 0x00, 0x7f, 0xfe, 0x00
+  }
+};
+
+void printFloat(float val, int x, int y, bool clr, int precision) {
+  myscreen.setCursor(x, y);
+  (clr) ? myscreen.setTextColor(WHITE) : myscreen.setTextColor(BLACK);
+  myscreen.print(val, precision);
+}
+/* 
+  - void centerText(const char* str, int x, int y, bool clr);
+*/
+void centerText(const char* str, int x, int y, bool clr) {
+  int x_cursor = (x - (strlen(str) * 6)) / 2;
+  myscreen.setCursor(x_cursor, y);
+  (clr) ? myscreen.setTextColor(WHITE) : myscreen.setTextColor(BLACK);
+  myscreen.print(str);
+}
+void printInt(int val, int x, int y, bool clr) {
+  myscreen.setCursor(x, y);
+  (clr) ? myscreen.setTextColor(WHITE) : myscreen.setTextColor(BLACK);
+  myscreen.print(val);
+}
+void centerString(String str, int x, int y, bool clr) {
+  int x_cursor = (x - (str.length() * 6)) / 2;
+  myscreen.setCursor(x_cursor, y);
+  (clr) ? myscreen.setTextColor(WHITE) : myscreen.setTextColor(BLACK);
+  myscreen.print(str);
+}
+
+
+void menu() {
+  if (digitalRead(BUTTON_DOWN) == LOW && BUTTON_DOWN_CLICKED) {
+    --menu_selected_item;
+    BUTTON_DOWN_CLICKED = false;
+    if (menu_selected_item < 0) menu_selected_item = (NUM_OPTION - 1);
+    scroll_left();
+  } 
+  else if (digitalRead(BUTTON_UP) == LOW && BUTTON_UP_CLICKED) {
+    ++menu_selected_item;
+    BUTTON_UP_CLICKED = false;
+    if (menu_selected_item >= NUM_OPTION) menu_selected_item = 0;
+    scroll_right();
+  } 
+  else if (digitalRead(BUTTON_SELECT) == LOW && BUTTON_SELECT_CLICKED) {
+    BUTTON_SELECT_CLICKED = false;
+    menu_action();
+  }
+
+  display_menu_info();
+
+  if (digitalRead(BUTTON_SELECT) == HIGH && !BUTTON_SELECT_CLICKED) {
+    BUTTON_SELECT_CLICKED = true;
+  }
+  if (digitalRead(BUTTON_UP) == HIGH && !BUTTON_UP_CLICKED) {
+    BUTTON_UP_CLICKED = true;
+  }
+  if (digitalRead(BUTTON_DOWN) == HIGH && !BUTTON_DOWN_CLICKED) {
+    BUTTON_DOWN_CLICKED = true;
+  }
+}
+void scroll_left() {
+  for (int i = 0; i < 12; i++) {
+    myscreen.clearDisplay();
+    for (int i = 0; i < NUM_OPTION; i++) {
+      myscreen.drawBitmap(menu_options[i].x_pos, 4, menu_icons[i], 32, 32, WHITE);
+      menu_options[i].x_pos += 4;
+    }
+    myscreen.drawRoundRect(0, 46, 128, 30, 20, WHITE);
+    myscreen.display();
+  }
+  for (int i = 0; i < NUM_OPTION; i++) {
+    if (menu_options[i].x_pos > 144) menu_options[i].x_pos = -96;
+  }
+}
+void scroll_right() {
+  for (int i = 0; i < 12; i++) {
+    myscreen.clearDisplay();
+    for (int i = 0; i < NUM_OPTION; i++) {
+      myscreen.drawBitmap(menu_options[i].x_pos, 4, menu_icons[i], 32, 32, WHITE);
+      menu_options[i].x_pos -= 4;
+    }
+    myscreen.drawRoundRect(0, 46, 128, 30, 20, WHITE);
+    myscreen.display();
+  }
+  for (int i = 0; i < NUM_OPTION; i++) {
+    if (menu_options[i].x_pos < -96) menu_options[i].x_pos = 144;
+  }
+}
+void menu_action() {
+  switch (menu_selected_item) {
+    case 0: // about
+      aboutUI();
+
+      while(digitalRead(BUTTON_EXIT) != LOW);
+      break;
+
+    case 1: //  load data
+      do {
+        myscreen.clearDisplay();
+        load_data();
+        myscreen.display();
+      }while (digitalRead(BUTTON_EXIT) != LOW);
+      break;
+
+    case 2: // inspect
+      do {
+        myscreen.clearDisplay();
+        inspect();
+        myscreen.display();
+      }while (digitalRead(BUTTON_EXIT) != LOW);
+      break;
+
+    case 3: // run
+      myscreen.clearDisplay();
+      myscreen.display();
+      iTime = millis();
+      stopBot = true;
+
+      do {
+        myscreen.clearDisplay();  // UI support - comment out to turn off display
+
+        runBOT();
+        sensorHistogram(pattern);  // UI support - comment out to turn off display  
+        systemInfo(); // UI support - comment out to turn off display
+        
+        myscreen.display(); // UI support - comment out to turn off display
+
+      }while (stopBot);
+
+      brake(leftMotor, rightMotor);
+      lap_time();
+      while (digitalRead(BUTTON_UP) != LOW) { };
+      delay(250);
+
+      break;
+
+    case 4: // drive mode
+      do {
+        myscreen.clearDisplay();
+        setDriveHUD();
+        myscreen.display();
+      }while (digitalRead(BUTTON_EXIT) != LOW);
+      break;
+
+    case 5: // check motor
+      motor_selected_item = 1;
+      switch_m = false;
+      do {
+        myscreen.clearDisplay();
+        checkMotor();
+        myscreen.display();
+      } while (digitalRead(BUTTON_EXIT) != LOW);
+
+      brake(leftMotor, rightMotor);
+      right_m = 40;
+      left_m = 40;
+      break;
+  }
+}
+void display_menu_info() {
+  myscreen.clearDisplay();
+  for (int i = 0; i < NUM_OPTION; i++) {
+    myscreen.drawBitmap(menu_options[i].x_pos, 4, menu_icons[i], 32, 32, WHITE);
+  }
+  centerText(menu_options[menu_selected_item].name, 128, 54, 1);
+  myscreen.fillRoundRect(40, 38, 48, 4, 20, WHITE);
+  myscreen.drawRoundRect(0, 46, 128, 30, 20, WHITE);
+  myscreen.display();
+}
+
+
+// case 0 : about
+void aboutUI() {
+  myscreen.clearDisplay();
+  myscreen.fillRect(0, 0, 128, 64, 1);
+  centerText("DEVELOPED BY", 128, 5, 0);
+  centerText("ARNAB - CSE(22-3)", 128, 20, 0);
+  centerText("PhoenixUI", 128, 45, 0);
+  centerText("Version 2.0.0", 128, 55, 0);
+  myscreen.display();
+}
+
+// case 1 : load data
+void load_data() {
+  if (digitalRead(BUTTON_DOWN) == LOW && BUTTON_DOWN_CLICKED) {
+    --selected_load_data_item;
+    load_data_cursor -= 32;
+    BUTTON_DOWN_CLICKED = false;
+    if (selected_load_data_item < 0) selected_load_data_item = 3;
+    if (load_data_cursor < 5) load_data_cursor = 101;
+  } else if (digitalRead(BUTTON_UP) == LOW && BUTTON_UP_CLICKED) {
+    ++selected_load_data_item;
+    load_data_cursor += 32;
+    BUTTON_UP_CLICKED = false;
+    if (selected_load_data_item > 3) selected_load_data_item = 0;
+    if (load_data_cursor > 101) load_data_cursor = 5;
+  } else if (digitalRead(BUTTON_SELECT) == LOW && BUTTON_SELECT_CLICKED) {
+    BUTTON_SELECT_CLICKED = false;
+    load_data_action();
+  }
+
+  display_load_data_info();
+  if (digitalRead(BUTTON_SELECT) == HIGH && !BUTTON_SELECT_CLICKED) {
+    BUTTON_SELECT_CLICKED = true;
+  }
+  if (digitalRead(BUTTON_UP) == HIGH && !BUTTON_UP_CLICKED) {
+    BUTTON_UP_CLICKED = true;
+  }
+  if (digitalRead(BUTTON_DOWN) == HIGH && !BUTTON_DOWN_CLICKED) {
+    BUTTON_DOWN_CLICKED = true;
+  }
+}
+void load_data_action() {
+  switch (selected_load_data_item) {
+    case 0 :  // load calibrate()**
+      myscreen.clearDisplay();
+      centerString("LOADING DATA", 128, 32, 1);
+      myscreen.display();
+
+      neopixelWrite(RGB_BUILTIN, 0, RGB_BRIGHTNESS, 0);
+      delay(250);
+      neopixelWrite(RGB_BUILTIN, 0, 0, 0);
+
+      loadCalibrationData();
+      
+      break;
+    
+    case 1 :  // recalibrate()**
+      myscreen.clearDisplay();
+      centerString("CALIBRATING", 128, 32, 1);
+      myscreen.display();
+  
+      calibrate();
+
+      delay(100);
+      calibration = readCalibrationValues();
+      // display black threshold and values
+      display_calibration_Info();
+
+      break;
+    
+    case 2 :  // load pid
+      loadPID(); 
+      break;
+    
+    case 3 :  // tune pid
+      do {
+        myscreen.clearDisplay();
+        tune_PID();
+        myscreen.display();
+      }while (digitalRead(BUTTON_EXIT) != LOW);
+      delay(250);
+      break;
+  }
+}
+void display_load_data_info() {
+  myscreen.drawRect(0, 5, 30, 30, 1);
+  myscreen.drawChar(9, 12, 'C', 0, 1, 2);
+
+  myscreen.drawRect(32, 5, 30, 30, 1);
+  myscreen.drawChar(41, 12, 'R', 0, 1, 2);
+
+  myscreen.drawRect(64, 5, 30, 30, 1);
+  myscreen.drawChar(73, 12, 'P', 0, 1, 2);
+
+  myscreen.drawRect(96, 5, 30, 30, 1);
+  myscreen.drawChar(105, 12, 'T', 0, 1, 2);
+
+  centerString(load_data_options[selected_load_data_item], 128, 54, 1);
+  myscreen.fillRoundRect(load_data_cursor, 38, 20, 4, 20, WHITE);
+  myscreen.drawRoundRect(0, 46, 128, 30, 20, WHITE);
+}
+// case 1 : (a) recalibrate() & load calibrate data
+void calibrateSensor() {
+  calibrate();
+}
+
+void loadCalibrationData() {
+
+  bool flag = isCalibrated();
+  
+  if(flag == false) { calibrate(); }
+  else { calibration = readCalibrationValues(); }
+
+  // display black threshold and values
+  display_calibration_Info();
+}
+
+void display_calibration_Info() {
+  int cnt = 0;
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    myscreen.clearDisplay();
+
+    //myscreen.drawRect(cnt, 0, 9, 20, 1);
+    myscreen.fillRect(cnt, 1, 9, map(calibration.threshold[i], 0, 1000, 1, 20), WHITE);
+    cnt += 10;
+    myscreen.display();
+    delay(100);
+    
+  }
+  myscreen.clearDisplay();
+
+  cnt = 0;
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    myscreen.drawRect(cnt, 0, 9, 20, 1);
+    myscreen.fillRect(cnt, 1, 9, map(calibration.threshold[i], 0, 1000, 1, 20), WHITE);
+    cnt += 10;
+  }
+  centerText("READY TO RACE", 128, 40, 1);
+  myscreen.display();
+  
+  while(digitalRead(BUTTON_EXIT) != LOW) { }
+
+  myscreen.clearDisplay();
+  myscreen.display();
+}
+
+void NVS_confirmation() {
+  myscreen.clearDisplay();
+  myscreen.fillRoundRect(0, 10, 128, 20, 4, 1);
+  centerText("APPLY CHANGES?", 128, 16, 0);
+  centerText("EXIT->", 64, 48, 1);
+  centerText("<-SELECT", 192, 48, 1);
+  myscreen.display();
+
+  bool flag = true;
+  do {
+    if (!digitalRead(BUTTON_SELECT)) {
+      delay(50);
+
+      writeCalibrationValues(calibration);
+
+      myscreen.clearDisplay();
+      centerText("UPDATED", 128, 32, 1);
+      myscreen.display();
+      delay(500);
+      flag = !flag;
+    } else if (!digitalRead(BUTTON_EXIT)) {
+      delay(50);
+
+      centerText("DISCARDED", 128, 32, 1);
+      myscreen.display();
+      delay(500);
+
+      myscreen.clearDisplay();
+      myscreen.display();
+      flag = !flag;
+    }
+  } while (flag);
+}
+
+// case 1 : (b) pid load & tuning
+void tune_PID() {
+  if (digitalRead(BUTTON_DOWN) == LOW && BUTTON_DOWN_CLICKED) {
+    pid_cursor_pos += 16;
+    BUTTON_DOWN_CLICKED = false;
+
+    if (pid_cursor_pos > 48) pid_cursor_pos = 0;
+  } 
+  else if (digitalRead(BUTTON_UP) == LOW && BUTTON_UP_CLICKED) {
+    pid_cursor_pos -= 16;
+    BUTTON_UP_CLICKED = false;
+
+    if (pid_cursor_pos < 0) pid_cursor_pos = 48;
+  } 
+  else if (digitalRead(BUTTON_SELECT) == LOW && BUTTON_SELECT_CLICKED) {
+    BUTTON_SELECT_CLICKED = false;
+    adjustPID();
+  }
+
+  if (digitalRead(BUTTON_SELECT) == HIGH && !BUTTON_SELECT_CLICKED) {
+    BUTTON_SELECT_CLICKED = true;
+  }
+  if (digitalRead(BUTTON_UP) == HIGH && !BUTTON_UP_CLICKED) {
+    BUTTON_UP_CLICKED = true;
+  }
+  if (digitalRead(BUTTON_DOWN) == HIGH && !BUTTON_DOWN_CLICKED) {
+    BUTTON_DOWN_CLICKED = true;
+  }
+  display_pid_settings();
+}
+void adjustPID() {
+  switch (pid_cursor_pos) {
+    case 0:
+      do {
+        myscreen.clearDisplay();
+        byte up = push(BUTTON_UP);
+        byte down = push(BUTTON_DOWN);
+
+        if(up){
+          if(up == 1) {
+            p_tmp++;
+            Kp = p_tmp / 100000;
+          }
+          else if(up == 2) {
+            p_tmp += 10;
+            Kp = p_tmp / 100000;
+          }
+          else if(up == 3) {
+            p_tmp += 50;
+            Kp = p_tmp / 100000;
+          }
+        }
+        if(down){
+          if(down == 1) {
+            p_tmp--;
+            Kp = p_tmp / 100000;
+          }
+          else if(down == 2) {
+            p_tmp -= 10;
+            Kp = p_tmp / 100000;
+          }
+          else if(down == 3) {
+            p_tmp -= 50;
+            Kp = p_tmp / 100000;
+          }
+        }
+        display_pid_settings();
+        myscreen.display();
+      } while (digitalRead(BUTTON_EXIT) != LOW);
+      delay(250);
+      break;
+
+    case 16:
+      do {
+        myscreen.clearDisplay();
+        byte up = push(BUTTON_UP);
+        byte down = push(BUTTON_DOWN);
+
+        if(up){
+          if(up == 1) {
+            i_tmp++;
+            Ki = i_tmp / 100000;
+          }
+          else if(up == 2) {
+            i_tmp += 10;
+            Ki = i_tmp / 100000;
+          }
+          else if(up == 3) {
+            i_tmp += 50;
+            Ki = i_tmp / 100000;
+          }
+        }
+        if(down){
+          if(down == 1) {
+            i_tmp--;
+            Ki = i_tmp / 100000;
+          }
+          else if(down == 2) {
+            i_tmp -= 10;
+            Ki = i_tmp / 100000;
+          }
+          else if(down == 3) {
+            i_tmp -= 50;
+            Ki = i_tmp / 100000;
+          }
+        }
+        display_pid_settings();
+        myscreen.display();
+      } while (digitalRead(BUTTON_EXIT) != LOW);
+      delay(250);
+      break;
+
+    case 32:
+      do {
+        myscreen.clearDisplay();
+        byte up = push(BUTTON_UP);
+        byte down = push(BUTTON_DOWN);
+
+        if(up){
+          if(up == 1) {
+            d_tmp++;
+            Kd = d_tmp / 100000;
+          }
+          else if(up == 2) {
+            d_tmp += 10;
+            Kd = d_tmp / 100000;
+          }
+          else if(up == 3) {
+            d_tmp += 50;
+            Kd = d_tmp / 100000;
+          }
+        }
+        if(down){
+          if(down == 1) {
+            d_tmp--;
+            Kd = d_tmp / 100000;
+          }
+          else if(down == 2) {
+            d_tmp -= 10;
+            Kd = d_tmp / 100000;
+          }
+          else if(down == 3) {
+            d_tmp -= 50;
+            Kd = d_tmp / 100000;
+          }
+        }
+        display_pid_settings();
+        myscreen.display();
+      } while (digitalRead(BUTTON_EXIT) != LOW);
+      delay(250);
+      break;
+
+    case 48:
+      delay(250);
+      myscreen.clearDisplay();
+      myscreen.fillRoundRect(0, 10, 128, 20, 4, 1);
+      centerText("APPLY CHANGES?", 128, 16, 0);
+      centerText("EXIT->", 64, 48, 1);
+      centerText("<-SELECT", 192, 48, 1);
+      myscreen.display();
+      bool flag = true;
+      do {
+        if(!digitalRead(BUTTON_SELECT)) {
+          delay(50);
+          updatePID();
+          myscreen.clearDisplay();
+          centerText("SAVED", 128, 32, 1);
+          myscreen.display();
+          delay(500);
+          flag = !flag;
+        }
+        else if (!digitalRead(BUTTON_EXIT)) {
+          delay(50);
+          myscreen.clearDisplay();
+          myscreen.display();
+          flag = !flag;
+        }
+      }while (flag);
+      delay(50);
+      break;
+  }
+}
+void display_pid_settings() {
+  myscreen.drawRoundRect(10, 0, 108, 16, 4, WHITE);
+  myscreen.drawRoundRect(10, 16, 108, 16, 4, WHITE);
+  myscreen.drawRoundRect(10, 32, 108, 16, 4, WHITE);
+  myscreen.drawRoundRect(10, 48, 108, 16, 4, WHITE);
+  myscreen.fillRoundRect(10, pid_cursor_pos, 108, 15, 4, WHITE);
+
+  centerText("KP:", 65, 4, 0);
+  centerText("KI:", 65, 20, 0);
+  centerText("KD:", 65, 36, 0);
+  printFloat(Kp, 50, 4, 0, 6);
+  printFloat(Ki, 50, 20, 0, 6);
+  printFloat(Kd, 50, 36, 0, 6);
+
+  centerText("SAVE TO MEMORY", 128, 53, 0);
+}
+byte push(byte button_number) {
+  uint32_t b_timer = 0;
+  if (!digitalRead(button_number)) {  
+    delay(50);                        
+    while (!digitalRead(button_number)) {
+      delay(50);
+      b_timer += 50;
+    }
+    if(b_timer > 1000) return 3;  // super long press
+    else if (b_timer > 500) return 2;    //long press
+    else if (b_timer > 0) return 1;  //short press
+  }
+  return 0;
+}
+
+void loadPID() {
+  Preferences pid;
+
+  pid.begin("pidValues", RO_MODE);
+
+  bool pidInit = pid.isKey("init");
+
+  if(pidInit == false) {
+    neopixelWrite(RGB_BUILTIN, RGB_BRIGHTNESS, 0, 0);
+    pid.end();
+    pid.begin("pidValues", RW_MODE);
+
+    pid.putFloat("Kp", 0.01285);
+    pid.putFloat("Ki", 0.01285);
+    pid.putFloat("Kd", 0.01285);
+    pid.putBool("init", true);
+
+    pid.end();
+    delay(250);
+    neopixelWrite(RGB_BUILTIN, 0, 0, 0);
+  }
+  else {
+    neopixelWrite(RGB_BUILTIN, 0, RGB_BRIGHTNESS, 0);
+    pid.begin("pidValues", RO_MODE);
+
+    Kp = pid.getFloat("Kp");
+    Ki = pid.getFloat("Ki");
+    Kd = pid.getFloat("Kd");
+
+    pid.end(); 
+
+    d_tmp = Kd * 100000;
+    p_tmp = Kp * 100000;
+    i_tmp = Ki * 100000;
+
+    delay(250);
+    neopixelWrite(RGB_BUILTIN,0,0,0);
+  }
+}
+void updatePID() {
+  Preferences pid;
+
+  neopixelWrite(RGB_BUILTIN, 0, RGB_BRIGHTNESS, 0);
+  pid.begin("pidValues", RW_MODE);
+  pid.clear();
+
+  pid.putFloat("Kp", Kp);
+  pid.putFloat("Ki", Ki);
+  pid.putFloat("Kd", Kd);
+  pid.putBool("init", true);
+
+  pid.end();
+  delay(250);
+  neopixelWrite(RGB_BUILTIN,0,0,0);
+}
+
+// case 2 : inspect - ALWAYS USE THIS FUNCTION AFTER readSensorData() function
+void inspect() {  
+  readSensorData();
+  sensorHistogram(sensorValues);
+  systemInfo();
+}
+
+void sensorHistogram(uint16_t sensorValues[]) {
+  int cnt = 0;
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    myscreen.fillRect(cnt, 1, 9, map(sensorValues[i], 0, 1000, 1, 20), WHITE);
+    cnt += 10;
+  }
+}
+void sensorHistogram(std::bitset <NUM_SENSORS> pattern) {
+  int cnt = 0;
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    myscreen.fillRect(cnt, 1, 9, map(pattern[i], 0, 1, 1, 20), WHITE);
+    cnt += 10;
+  }
+}
+void systemInfo() {
+  myscreen.drawRoundRect(0, 22, 41, 20, 8, WHITE);
+  myscreen.drawRoundRect(43, 22, 41, 20, 8, WHITE);
+  myscreen.drawRoundRect(86, 22, 41, 20, 8, WHITE);
+  myscreen.drawRoundRect(0, 46, 72, 20, 8, WHITE);
+  myscreen.drawRoundRect(74, 46, 54, 20, 8, WHITE);
+  printInt(/*l_motor*/ left_motor_speed, 10, 29, 1);
+  printInt(/*adjustment*/ (int)adjustment, 53, 29, 1);
+  printInt(/*r_motor*/ right_motor_speed, 96, 29, 1);
+  printInt(/*bot_position*/ botPosition, 20, 52, 1);
+  printInt(/*path_index*/ path_index, 95, 52, 1);
+}
+
+// case 4 : drive mode - switch between normal and inverse line, enable or disable left/right hand follow
+// more control over the drive system will be available soon
+void setDriveHUD() {
+  if (digitalRead(BUTTON_DOWN) == LOW && BUTTON_DOWN_CLICKED) {
+    hud_x_cursor -= 21;
+    BUTTON_DOWN_CLICKED = false;
+    if (hud_x_cursor < 0) hud_x_cursor = 66;
+  } 
+  else if (digitalRead(BUTTON_UP) == LOW && BUTTON_UP_CLICKED) {
+    hud_x_cursor += 21;
+    BUTTON_UP_CLICKED = false;
+    if(hud_x_cursor > 66) hud_x_cursor = 3;
+  } 
+  else if (digitalRead(BUTTON_SELECT) == LOW && BUTTON_SELECT_CLICKED) {
+    BUTTON_SELECT_CLICKED = false;
+    HUD_action();
+  }
+
+  display_HUD_info();
+
+  if (digitalRead(BUTTON_SELECT) == HIGH && !BUTTON_SELECT_CLICKED) {
+    BUTTON_SELECT_CLICKED = true;
+  }
+  if (digitalRead(BUTTON_UP) == HIGH && !BUTTON_UP_CLICKED) {
+    BUTTON_UP_CLICKED = true;
+  }
+  if (digitalRead(BUTTON_DOWN) == HIGH && !BUTTON_DOWN_CLICKED) {
+    BUTTON_DOWN_CLICKED = true;
+  }
+}
+void HUD_action() {
+  switch(hud_x_cursor) {
+    case 3:
+      do {
+        myscreen.clearDisplay();
+        
+        if (digitalRead(BUTTON_SELECT) == LOW && BUTTON_SELECT_CLICKED) {
+          BUTTON_SELECT_CLICKED = false;
+          left_hand_follow = !left_hand_follow;
+        }
+        if (digitalRead(BUTTON_SELECT) == HIGH && !BUTTON_SELECT_CLICKED) {
+          BUTTON_SELECT_CLICKED = true;
+        }
+
+        display_HUD_info();
+        myscreen.display();
+      } while (digitalRead(BUTTON_EXIT) != LOW);
+      break;
+      delay(250);
+    case 24:
+      do {
+        myscreen.clearDisplay();
+        
+        if (digitalRead(BUTTON_SELECT) == LOW && BUTTON_SELECT_CLICKED) {
+          BUTTON_SELECT_CLICKED = false;
+          lineInverse = !lineInverse;
+        }
+        if (digitalRead(BUTTON_SELECT) == HIGH && !BUTTON_SELECT_CLICKED) {
+          BUTTON_SELECT_CLICKED = true;
+        }
+
+        display_HUD_info();
+        myscreen.display();
+      } while (digitalRead(BUTTON_EXIT) != LOW);
+      delay(250);
+      break;
+    case 45:
+      do {
+        myscreen.clearDisplay();
+        
+        if (digitalRead(BUTTON_SELECT) == LOW && BUTTON_SELECT_CLICKED) {
+          BUTTON_SELECT_CLICKED = false;
+          right_hand_follow = !right_hand_follow;
+        }
+        if (digitalRead(BUTTON_SELECT) == HIGH && !BUTTON_SELECT_CLICKED) {
+          BUTTON_SELECT_CLICKED = true;
+        }
+
+        display_HUD_info();
+        myscreen.display();
+      } while (digitalRead(BUTTON_EXIT) != LOW);
+      delay(250);
+      break;
+    case 66 : 
+      do {
+        myscreen.clearDisplay();
+
+        if (digitalRead(BUTTON_DOWN) == LOW && BUTTON_DOWN_CLICKED) {
+          path_index--;
+          BUTTON_DOWN_CLICKED = false;
+
+          if(path_index < 0) path_index = 0;
+        }
+        else if (digitalRead(BUTTON_UP) == LOW && BUTTON_UP_CLICKED){
+          path_index++;
+          BUTTON_UP_CLICKED = false;
+        }
+
+        if (digitalRead(BUTTON_UP) == HIGH && !BUTTON_UP_CLICKED) {
+          BUTTON_UP_CLICKED = true;
+        }
+        if (digitalRead(BUTTON_DOWN) == HIGH && !BUTTON_DOWN_CLICKED) {
+          BUTTON_DOWN_CLICKED = true;
+        }
+
+        display_HUD_info();
+        myscreen.display();
+      }while (digitalRead(BUTTON_EXIT) != LOW);
+      delay(250);
+      break;
+  }
+}
+void display_HUD_info() {
+  myscreen.fillRoundRect(hud_x_cursor/*3*/, 38, 14, 2, 4, 1);
+
+  if(left_hand_follow) {
+    myscreen.fillRoundRect(0, 42, 20, 22, 3, 1);
+    myscreen.drawChar(5, 46, 'L', 0, 1, 2);
+  }
+  else {
+    myscreen.drawRoundRect(0, 42, 20, 22, 3, 1);
+    myscreen.drawChar(5, 46, 'L', 1, 0, 2);
+  }
+
+  if(right_hand_follow) {
+    myscreen.fillRoundRect(42, 42, 20, 22, 3, 1);
+    myscreen.drawChar(47, 46, 'R', 0, 1, 2);
+  }
+  else {
+    myscreen.drawRoundRect(42, 42, 20, 22, 3, 1);
+    myscreen.drawChar(47, 46, 'R', 1, 0, 2);
+  }
+
+  if(lineInverse) {
+    myscreen.fillRoundRect(21, 42, 20, 22, 3, 1);
+    myscreen.drawChar(26, 46, 'I', 0, 1, 2);
+  }
+  else {
+    myscreen.fillRoundRect(21, 42, 20, 22, 3, 1);
+    myscreen.drawChar(26, 46, 'N', 0, 1, 2);
+  }
+
+  myscreen.fillRoundRect(63, 42, 20, 22, 3, 1);
+  printInt(path_index, 68, 52, 0);
+}
+// case 5 : check motor
+void checkMotor() {
+  if (digitalRead(BUTTON_DOWN) == LOW && BUTTON_DOWN_CLICKED) {
+    --motor_selected_item;
+    BUTTON_DOWN_CLICKED = false;
+    if (motor_selected_item < 0) motor_selected_item = 2;
+  } else if (digitalRead(BUTTON_UP) == LOW && BUTTON_UP_CLICKED) {
+    ++motor_selected_item;
+    BUTTON_UP_CLICKED = false;
+    if (motor_selected_item > 2) motor_selected_item = 0;
+  } else if (digitalRead(BUTTON_SELECT) == LOW && BUTTON_SELECT_CLICKED) {
+    BUTTON_SELECT_CLICKED = false;
+    motor_menu_action();
+  }
+
+  if (digitalRead(BUTTON_SELECT) == HIGH && !BUTTON_SELECT_CLICKED) {
+    BUTTON_SELECT_CLICKED = true;
+  }
+  if (digitalRead(BUTTON_UP) == HIGH && !BUTTON_UP_CLICKED) {
+    BUTTON_UP_CLICKED = true;
+  }
+  if (digitalRead(BUTTON_DOWN) == HIGH && !BUTTON_DOWN_CLICKED) {
+    BUTTON_DOWN_CLICKED = true;
+  }
+
+  display_motor_info();
+
+  if (switch_m) {
+    leftMotor.drive(left_m);
+    rightMotor.drive(right_m);
+  }
+}
+void motor_menu_action() {
+  switch (motor_selected_item) {
+    case 0:
+      do {
+        myscreen.clearDisplay();
+        set_left_motor();
+        myscreen.display();
+      } while (digitalRead(BUTTON_EXIT) != LOW);
+      delay(250);
+      break;
+
+    case 1:
+      switch_m = !switch_m;
+
+      if (!switch_m) {
+        leftMotor.brake();
+        rightMotor.brake();
+      }
+      break;
+
+    case 2:
+      do {
+        myscreen.clearDisplay();
+        set_right_motor();
+        myscreen.display();
+      } while (digitalRead(BUTTON_EXIT) != LOW);
+      delay(250);
+      break;
+  }
+}
+void set_left_motor() {
+  if (digitalRead(BUTTON_DOWN) == LOW) {
+    --left_m;
+    if (switch_m) leftMotor.drive(left_m);
+    if (left_m < -255) left_m = -255;
+  } else if (digitalRead(BUTTON_UP) == LOW) {
+    ++left_m;
+    if (switch_m) leftMotor.drive(left_m);
+    if (left_m > 255) left_m = 255;
+  }
+  delay(75);
+  display_motor_info();
+}
+void set_right_motor() {
+  if (digitalRead(BUTTON_DOWN) == LOW) {
+    --right_m;
+    if (switch_m) rightMotor.drive(right_m);
+    if (right_m < -255) right_m = -255;
+  } else if (digitalRead(BUTTON_UP) == LOW) {
+    ++right_m;
+    if (switch_m) rightMotor.drive(right_m);
+    if (right_m > 255) right_m = 255;
+  }
+  delay(75);
+
+  display_motor_info();
+}
+void display_motor_info() {
+
+  myscreen.drawRoundRect(0, 2, 41, 30, 20, WHITE);
+  myscreen.drawRoundRect(43, 2, 41, 30, 20, WHITE);
+  myscreen.drawRoundRect(86, 2, 41, 30, 20, WHITE);
+  printInt(left_m, 10, 14, 1);
+  printInt(right_m, 96, 14, 1);
+  (switch_m) ? centerText("ON", 128, 14, 1) : centerText("OFF", 128, 14, 1);
+  centerText(motor_menu_options[motor_selected_item].m_name, 128, 54, 1);
+  myscreen.fillRoundRect(motor_menu_options[motor_selected_item].x_pos, 38, 41, 4, 20, WHITE);
+  myscreen.drawRoundRect(0, 46, 128, 30, 20, WHITE);
+  
+}
+void lap_time() {
+  fTime = millis();
+  duration = (fTime - iTime) / 1000.0;
+  myscreen.clearDisplay();
+  centerText("TIME TAKEN", 128, 10, 1);
+  printFloat(duration, 45, 25, 1, 3);
+  myscreen.display();
+}
+
+#endif

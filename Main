@@ -1,0 +1,82 @@
+#define USE_MUX 
+#include <sensor.h>
+#include <SparkFun_TB6612.h>
+
+#define LED_BUILTIN 2
+#define PWMA 4
+#define AIN1 17
+#define AIN2 16
+#define PWMB 23
+#define BIN1 18
+#define BIN2 19
+#define STDBY 5
+
+int base_speed = 200;
+int error, lastError;
+const int offsetA = -1;
+const int offsetB = -1;
+
+Motor motor1 = Motor(AIN1, AIN2, PWMA, offsetA, STDBY);
+Motor motor2 = Motor(BIN1, BIN2, PWMB, offsetB, STDBY);
+
+float Kp = 0.075;
+float kd = 0.0;
+int goal = 5765;
+
+//const int NUM_SENSORS = 13; // Define the number of sensors used
+bool sensors[NUM_SENSORS] = {false, false, false, false, false, false, false, false, false, false, false, false, false};
+int inactiveCounter = 0;
+const int INACTIVE_THRESHOLD = 5;
+bool stopBot = false;
+
+void setup() {
+  pinMode(14, OUTPUT);
+  pinMode(27, OUTPUT);
+  pinMode(26, OUTPUT);
+  pinMode(25, OUTPUT);
+  pinMode(33, INPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
+  Serial.begin(9600);
+
+  delay(100);
+  if (!isCalibrated()) {
+    
+    calibrate();
+    writeCalibrationValues(calibration);
+  } else {
+    calibration = readCalibrationValues();
+  }
+}
+
+void loop() {
+  position = readCalibrated(sensorValues);  // Ensure sensorValues is defined and updated
+
+  drive();  // Ensure this function is defined properly
+  if (!stopBot) {
+    checkSensors();
+  }
+}
+
+void checkSensors() {
+  bool allInactive = true;
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    if (sensors[i]) {
+      allInactive = false;
+      break;
+    }
+  }
+  if (allInactive) {
+    inactiveCounter++;
+    if (inactiveCounter >= INACTIVE_THRESHOLD) {
+      stopRobot();
+    }
+  } else {
+    inactiveCounter = 0;
+  }
+}
+
+void stopRobot() {
+  motor1.brake();  // Assuming these functions are defined in your Motor class
+  motor2.brake();
+  stopBot = true;
+}

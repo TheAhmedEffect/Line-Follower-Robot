@@ -66,7 +66,7 @@ Contributions are welcome! If you have suggestions, bug reports, or feature requ
 This project is open-source and available under the MIT License. You are free to use, modify, and distribute the code following the license terms.
 
 ## Acknowledgments
-- **Arnab (CSE 22-3)**: Developed the PhoenixUI and contributed to the overall project.
+- **Zisan (CSE 22-3)**: Developed the PhoenixUI and contributed to the overall project.
 - **SparkFun**: TB6612FNG motor driver library.
 - **Adafruit**: GFX and SSD1306 libraries for OLED display.
 
